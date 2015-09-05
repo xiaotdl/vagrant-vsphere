@@ -17,7 +17,7 @@ module VagrantPlugins
         end
 
         def call(env)
-          vm = get_vm_by_uuid env[:vSphere_connection], env[:machine]
+          vm = get_vm_by_uuid env[:vsphere].connection, env[:machine]
 
           env[:ui].info I18n.t('vsphere.power_on_vm')
           power_on_vm(vm)

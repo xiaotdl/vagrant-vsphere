@@ -7,8 +7,14 @@ group :development do
   # gem dependency because we expect to be installed within the
   # Vagrant environment itself using `vagrant plugin`.
 
-  ruby '2.0.0'
-  gem 'vagrant', git: 'git://github.com/mitchellh/vagrant.git', tag: 'v1.6.4'
+  if File.exist?(File.expand_path("../../vagrant", __FILE__))
+    gem 'vagrant', path: "../vagrant"
+  else
+    gem 'vagrant', :git => 'git://github.com/mitchellh/vagrant.git'
+  end
+
+  gem 'pry'
+  gem 'pry-byebug'
 end
 
 group :plugins do

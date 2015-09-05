@@ -1,12 +1,19 @@
-require 'rbvmomi'
 require 'i18n'
+require 'netaddr'
+
+require 'rbvmomi'
+
 require 'vSphere/util/vim_helpers'
 require 'vSphere/util/machine_helpers'
+require 'vSphere/util/network'
+require 'vSphere/sync'
 
 module VagrantPlugins
   module VSphere
     module Action
       class Clone
+        VIM = RbVmomi::VIM
+
         include Util::VimHelpers
         include Util::MachineHelpers
 
@@ -16,72 +23,104 @@ module VagrantPlugins
 
         def call(env)
           machine = env[:machine]
-          config = machine.provider_config
-          connection = env[:vSphere_connection]
-          name = get_name machine, config, env[:root_path]
-          dc = get_datacenter connection, machine
-          template = dc.find_vm config.template_name
-          fail Errors::VSphereError, :'missing_template' if template.nil?
-          vm_base_folder = get_vm_base_folder dc, template, config
-          fail Errors::VSphereError, :'invalid_base_path' if vm_base_folder.nil?
+          config = machine.config
+          provider_config = machine.provider_config
 
-          begin
-            # Storage DRS does not support vSphere linked clones. http://www.vmware.com/files/pdf/techpaper/vsphere-storage-drs-interoperability.pdf
-            ds = get_datastore dc, machine
-            fail Errors::VSphereError, :'invalid_configuration_linked_clone_with_sdrs' if config.linked_clone && ds.is_a?(RbVmomi::VIM::StoragePod)
+          vsphere_env = env[:vsphere]
 
-            location = get_location ds, dc, machine, template
-            spec = RbVmomi::VIM.VirtualMachineCloneSpec location: location, powerOn: true, template: false
-            spec[:config] = RbVmomi::VIM.VirtualMachineConfigSpec
-            customization_info = get_customization_spec_info_by_name connection, machine
+          connection = vsphere_env.connection
+          dc = get_datacenter(connection, machine)
 
-            spec[:customization] = get_customization_spec(machine, customization_info) unless customization_info.nil?
-            add_custom_address_type(template, spec, config.addressType) unless config.addressType.nil?
-            add_custom_mac(template, spec, config.mac) unless config.mac.nil?
-            add_custom_vlan(template, dc, spec, config.vlan) unless config.vlan.nil?
-            add_custom_memory(spec, config.memory_mb) unless config.memory_mb.nil?
-            add_custom_cpu(spec, config.cpu_count) unless config.cpu_count.nil?
-            add_custom_cpu_reservation(spec, config.cpu_reservation) unless config.cpu_reservation.nil?
-            add_custom_mem_reservation(spec, config.mem_reservation) unless config.mem_reservation.nil?
+          name = vm_name(machine, provider_config, env[:root_path])
 
-            if !config.clone_from_vm && ds.is_a?(RbVmomi::VIM::StoragePod)
+          template = dc.find_vm(provider_config.template_name)
+          if template.nil?
+            fail Errors::VSphereError,
+              _key: :'provision.vm.missing_template',
+              name: provider_config.template_name
+          end
 
-              storage_mgr = connection.serviceContent.storageResourceManager
-              pod_spec = RbVmomi::VIM.StorageDrsPodSelectionSpec(storagePod: ds)
-              # TODO: May want to add option on type?
-              storage_spec = RbVmomi::VIM.StoragePlacementSpec(type: 'clone', cloneName: name, folder: vm_base_folder, podSelectionSpec: pod_spec, vm: template, cloneSpec: spec)
+          folder = get_vm_folder(provider_config, dc, template)
 
-              env[:ui].info I18n.t('vsphere.requesting_sdrs_recommendation')
-              env[:ui].info " -- DatastoreCluster: #{ds.name}"
-              env[:ui].info " -- Template VM: #{template.pretty_path}"
-              env[:ui].info " -- Target VM: #{vm_base_folder.pretty_path}/#{name}"
+          datastore = get_datastore(dc, machine)
+          if provider_config.linked_clone && datastore.is_a?(VIM::StoragePod)
+            fail Errors::VSphereError, :'provision.vm.linked_clone_with_sdrs'
+          end
 
-              result = storage_mgr.RecommendDatastores(storageSpec: storage_spec)
+          # Storage DRS does not support vSphere linked clones.
+          # http://www.vmware.com/files/pdf/techpaper/vsphere-storage-drs-interoperability.pdf
 
-              recommendation = result.recommendations[0]
-              key = recommendation.key ||= ''
-              if key == ''
-                fail Errors::VSphereError, :missing_datastore_recommendation
-              end
+          if provider_config.linked_clone
+            tweak_template_for_linked_cloning(template)
+          end
 
-              env[:ui].info I18n.t('vsphere.creating_cloned_vm_sdrs')
-              env[:ui].info " -- Storage DRS recommendation: #{recommendation.target.name} #{recommendation.reasonText}"
+          spec = prepare_clone_spec(vsphere_env, config, provider_config,
+                                    connection, dc, datastore, template)
 
-              apply_sr_result = storage_mgr.ApplyStorageDrsRecommendation_Task(key: [key]).wait_for_completion
-              new_vm = apply_sr_result.vm
+          if !provider_config.clone_from_vm && datastore.is_a?(VIM::StoragePod)
 
-            else
+            storage_mgr = connection.serviceContent.storageResourceManager
+            # TODO: May want to add option on type?
+            storage_spec = VIM.StoragePlacementSpec(
+              type: 'clone',
+              cloneName: name,
+              folder: folder,
+              podSelectionSpec: VIM.StorageDrsPodSelectionSpec(
+                storagePod: datastore
+              ),
+              vm: template,
+              cloneSpec: spec
+            )
 
-              env[:ui].info I18n.t('vsphere.creating_cloned_vm')
-              env[:ui].info " -- #{config.clone_from_vm ? 'Source' : 'Template'} VM: #{template.pretty_path}"
-              env[:ui].info " -- Target VM: #{vm_base_folder.pretty_path}/#{name}"
+            env[:ui].info(
+              I18n.t('vsphere.requesting_sdrs_recommendation',
+                     datastore: datastore.name,
+                     template: template.pretty_path,
+                     folder: folder.pretty_path,
+                     name: name)
+            )
 
-              new_vm = template.CloneVM_Task(folder: vm_base_folder, name: name, spec: spec).wait_for_completion
+            result = storage_mgr.RecommendDatastores(storageSpec: storage_spec)
+
+            recommendation = result.recommendations[0]
+            key = recommendation.key
+            unless key
+              fail Errors::VSphereError, :missing_datastore_recommendation
             end
-          rescue Errors::VSphereError
-            raise
-          rescue StandardError => e
-            raise Errors::VSphereError.new, e.message
+
+            env[:ui].info(
+              I18n.t('vsphere.creating_cloned_vm_sdrs',
+                     target: recommendation.target.name,
+                     reason: recommendation.reasonText)
+            )
+
+            apply_sr_result = \
+              storage_mgr.ApplyStorageDrsRecommendation_Task(key: [key]).wait_for_completion
+            new_vm = apply_sr_result.vm
+
+          else
+
+            if provider_config.clone_from_vm
+              env[:ui].info(
+                I18n.t('vsphere.creating_cloned_vm.from_vm',
+                       source: template.pretty_path,
+                       folder: folder.pretty_path,
+                       name: name)
+              )
+            else
+              env[:ui].info(
+                I18n.t('vsphere.creating_cloned_vm.from_template',
+                       template: template.pretty_path,
+                       folder: folder.pretty_path,
+                       name: name)
+              )
+            end
+
+            new_vm = template.CloneVM_Task(
+              folder: folder,
+              name: name,
+              spec: spec
+            ).wait_for_completion
           end
 
           # TODO: handle interrupted status in the environment, should the vm be destroyed?
@@ -98,142 +137,419 @@ module VagrantPlugins
 
         private
 
-        def get_customization_spec(machine, spec_info)
-          customization_spec = spec_info.spec.clone
-
-          # find all the configured private networks
-          private_networks = machine.config.vm.networks.find_all { |n| n[0].eql? :private_network }
-          return customization_spec if private_networks.nil?
-
-          # make sure we have enough NIC settings to override with the private network settings
-          fail Errors::VSphereError, :'too_many_private_networks' if private_networks.length > customization_spec.nicSettingMap.length
-
-          # assign the private network IP to the NIC
-          private_networks.each_index do |idx|
-            customization_spec.nicSettingMap[idx].adapter.ip.ipAddress = private_networks[idx][1][:ip]
+        def tweak_template_for_linked_cloning(template)
+          # The API for linked clones is quite strange. We can't create a
+          # linked clone straight from any VM. The disks of the VM for which we
+          # can create a linked clone need to be read-only and thus VC demands
+          # that the VM we are cloning from uses delta-disks. Only then it will
+          # allow us to share the base disk.
+          #
+          # Thus, this code first create a delta disk on top of the base disk for
+          # the to-be-cloned VM, if delta disks aren't used already.
+          disks = template.config.hardware.device.grep(VIM::VirtualDisk)
+          disks.select { |disk| disk.backing.parent.nil? }.each do |disk|
+            spec = {
+              deviceChange: [
+                {
+                  operation: :remove,
+                  device: disk
+                },
+                {
+                  operation: :add,
+                  fileOperation: :create,
+                  device: disk.dup.tap do |new_disk|
+                            new_disk.backing = new_disk.backing.dup
+                            new_disk.backing.fileName = "[#{disk.backing.datastore.name}]"
+                            new_disk.backing.parent = disk.backing
+                          end
+                }
+              ]
+            }
+            template.ReconfigVM_Task(spec: spec).wait_for_completion
           end
-
-          customization_spec
         end
 
-        def get_location(datastore, dc, machine, template)
-          if machine.provider_config.linked_clone
-            # The API for linked clones is quite strange. We can't create a linked
-            # straight from any VM. The disks of the VM for which we can create a
-            # linked clone need to be read-only and thus VC demands that the VM we
-            # are cloning from uses delta-disks. Only then it will allow us to
-            # share the base disk.
-            #
-            # Thus, this code first create a delta disk on top of the base disk for
-            # the to-be-cloned VM, if delta disks aren't used already.
-            disks = template.config.hardware.device.grep(RbVmomi::VIM::VirtualDisk)
-            disks.select { |disk| disk.backing.parent.nil? }.each do |disk|
-              spec = {
-                deviceChange: [
-                  {
-                    operation: :remove,
-                    device: disk
-                  },
-                  {
-                    operation: :add,
-                    fileOperation: :create,
-                    device: disk.dup.tap do |new_disk|
-                              new_disk.backing = new_disk.backing.dup
-                              new_disk.backing.fileName = "[#{disk.backing.datastore.name}]"
-                              new_disk.backing.parent = disk.backing
-                            end
-                  }
-                ]
-              }
-              template.ReconfigVM_Task(spec: spec).wait_for_completion
-            end
-
-            location = RbVmomi::VIM.VirtualMachineRelocateSpec(diskMoveType: :moveChildMostDiskBacking)
-          elsif datastore.is_a? RbVmomi::VIM::StoragePod
-            location = RbVmomi::VIM.VirtualMachineRelocateSpec
+        def prepare_relocation_spec(config, provider_config, dc, datastore)
+          if provider_config.linked_clone
+            spec = VIM.VirtualMachineRelocateSpec(
+              diskMoveType: :moveChildMostDiskBacking
+            )
           else
-            location = RbVmomi::VIM.VirtualMachineRelocateSpec
+            spec = VIM.VirtualMachineRelocateSpec
 
-            location[:datastore] = datastore unless datastore.nil?
+            unless datastore.nil? || datastore.is_a?(VIM::StoragePod)
+              spec[:datastore] = datastore
+            end
           end
-          location[:pool] = get_resource_pool(dc, machine) unless machine.provider_config.clone_from_vm
-          location
+
+          unless provider_config.clone_from_vm
+            spec[:pool] = get_resource_pool(dc, provider_config)
+          end
+
+          spec
         end
 
-        def get_name(machine, config, root_path)
+        def vm_name(machine, config, root_path)
           return config.name unless config.name.nil?
 
           prefix = "#{root_path.basename}_#{machine.name}"
           prefix.gsub!(/[^-a-z0-9_\.]/i, '')
-          # milliseconds + random number suffix to allow for simultaneous `vagrant up` of the same box in different dirs
+          # milliseconds + random number suffix to allow for simultaneous
+          # `vagrant up` of the same box in different dirs
           prefix + "_#{(Time.now.to_f * 1000.0).to_i}_#{rand(100_000)}"
         end
 
-        def get_vm_base_folder(dc, template, config)
-          if config.vm_base_path.nil?
+        def get_vm_folder(provider_config, dc, template)
+          path = provider_config.folder
+          if path.nil?
             template.parent
           else
-            dc.vmFolder.traverse(config.vm_base_path, RbVmomi::VIM::Folder, true)
+            folder = dc.vmFolder.traverse(path, VIM::Folder, true)
+            if folder.nil?
+              fail Errors::VSphereError,
+                _key: :'provision.vm.invalid_base_path', path: path
+            end
+
+            folder
           end
         end
 
-        def modify_network_card(template, spec)
-          spec[:config][:deviceChange] ||= []
-          @card ||= template.config.hardware.device.grep(RbVmomi::VIM::VirtualEthernetCard).first
+        def prepare_clone_spec(vsphere_env, config, provider_config,
+                               connection, dc, datastore, template)
+          network_info = get_network_info(vsphere_env, provider_config, dc)
 
-          fail Errors::VSphereError, :missing_network_card if @card.nil?
+          location = prepare_relocation_spec(config, provider_config,
+                                             dc, datastore)
 
-          yield(@card)
+          spec = VIM.VirtualMachineCloneSpec(
+            location: location,
+            powerOn: true,
+            template: false,
+            config: VIM.VirtualMachineConfigSpec
+          )
 
-          dev_spec = RbVmomi::VIM.VirtualDeviceConfigSpec(device: @card, operation: 'edit')
-          spec[:config][:deviceChange].push dev_spec
-          spec[:config][:deviceChange].uniq!
+          deviceChange = prepare_device_change(network_info, vsphere_env,
+                                               provider_config, template)
+          spec[:config][:deviceChange] = deviceChange if deviceChange.length
+
+          if provider_config.customization_spec_name
+            cust_spec = \
+              find_customization_spec(connection,
+                                      provider_config.customization_spec_name)
+            add_ips_to_cusomization_spec(cust_spec, config)
+            spec[:customization] = cust_spec
+          else
+            cust_spec = prepare_customization_spec(config, provider_config)
+            spec[:customization] = cust_spec if cust_spec
+          end
+
+          if !provider_config.memory_mb.nil?
+            spec[:config][:memoryMB] = Integer(provider_config.memory_mb)
+          end
+
+          if !provider_config.cpu_count.nil?
+            spec[:config][:numCPUs] = Integer(provider_config.cpu_count)
+          end
+
+          if !provider_config.cpu_reservation.nil?
+            spec[:config][:cpuAllocation] = VIM.ResourceAllocationInfo(
+              reservation: provider_config.cpu_reservation
+            )
+          end
+
+          if !provider_config.mem_reservation.nil?
+            spec[:config][:memoryAllocation] = VIM.ResourceAllocationInfo(
+              reservation: provider_config.mem_reservation
+            )
+          end
+
+          spec
         end
 
-        def add_custom_address_type(template, spec, addressType)
-          spec[:config][:deviceChange] = []
-          config = template.config
-          card = config.hardware.device.grep(RbVmomi::VIM::VirtualEthernetCard).first || fail(Errors::VSphereError, :missing_network_card)
-          card.addressType = addressType
-          card_spec = { :deviceChange => [{ :operation => :edit, :device => card }] }
-          template.ReconfigVM_Task(:spec => card_spec).wait_for_completion
+        def get_network_info(vsphere_env, provider_config, dc)
+          compute = get_compute_resource(dc, provider_config)
+
+          # We support only one host configuration at the moment.
+          if (compute.host.length == 0)
+            fail Errors::VSphereError, 'provision.compute.empty'
+          elsif (compute.host.length > 1)
+            fail Errors::VSphereError, 'provision.compute.cluster'
+          end
+
+          host = compute.host[0]
+
+          vsphere_env.network_info(host)
         end
 
-        def add_custom_mac(template, spec, mac)
-          modify_network_card(template, spec) do |card|
-            card.macAddress = mac
+        def find_customization_spec(connection, name)
+          manager = connection.serviceContent.customizationSpecManager
+          if manager.nil?
+            fail Errors::VSphereError,
+              :'provision.vm.null_configuration_spec_manager'
+          end
+
+          spec_item = manager.GetCustomizationSpec(name: name)
+          if spec_item.nil?
+            fail Errors::VSphereError,
+              _key: :'provision.vm.configuration_spec',
+              name: name
+          end
+
+          # Return the actual CustomizationSpec object.
+          spec_item.spec
+        end
+
+        def add_ips_to_cusomization_spec(spec, config)
+          networks = config.vm.networks
+
+          # Find all the configured networks.
+          networks = \
+            networks.find_all { |type, _opt| type != 'forwarded_port' }
+          return if networks.nil?
+
+          nicSettings = spec.nicSettingMap
+
+          if networks.length > nicSettingMap.length
+            fail Errors::VSphereError,
+              _key: :'provision.vm.customization_spec.network_count',
+              spec_nic_count: nicSettingMap.length,
+              network_count: networks.length
+          end
+
+          # Assign the network IP to the NIC.
+          networks.each_with_index do |(type, options), idx|
+            next if options.key?(:auto_config) && !options[:auto_config]
+            nicSettings[idx].adapter.ip.ipAddress = options[:ip]
           end
         end
 
-        def add_custom_vlan(template, dc, spec, vlan)
-          network = get_network_by_name(dc, vlan)
+        # For now this is only the NICs.
+        def prepare_device_change(network_info, vsphere_env,
+                                  provider_config, template)
+          vm_nics = \
+            template.config.hardware.device.grep(VIM::VirtualEthernetCard)
 
-          modify_network_card(template, spec) do |card|
-            begin
-              switch_port = RbVmomi::VIM.DistributedVirtualSwitchPortConnection(switchUuid: network.config.distributedVirtualSwitch.uuid, portgroupKey: network.key)
-              card.backing.port = switch_port
-            rescue
-              # not connected to a distibuted switch?
-              card.backing = RbVmomi::VIM::VirtualEthernetCardNetworkBackingInfo(network: network, deviceName: network.name)
+          # NICs have :index values starting with 1, not 0.  So we
+          # subtract 1 to get to the 0-based indexing logic.
+          config_nics = \
+            Hash[ provider_config.nics.map { |index, n| [index - 1, n] } ]
+
+          deviceChange = []
+
+          vm_nics.map.with_index { |vm_nic, index|
+            edit_network_card(network_info, vm_nic, config_nics[index])
+          }.compact.each do |edit_spec|
+            deviceChange << edit_spec
+          end
+
+          # If there are more nics configured than there are actual nics
+          # add the missing ones.
+
+          max_index = provider_config.nics.keys.max
+          add_last_index = max_index.nil? ? 0 : max_index - 1
+
+          (vm_nics.length .. add_last_index).map { |index|
+            add_network_card(network_info, vsphere_env, config_nics[index])
+          }.compact.each do |add_spec|
+            deviceChange << add_spec
+          end
+
+          deviceChange
+        end
+
+        def edit_network_card(network_info, nic, config)
+          # Check if this nic needs any configuration changes
+          prepared_backing = nil
+          begin
+            return nil if config.nil?
+
+            prepared_backing = \
+              prepare_network_card_backing_info(network_info,
+                                                config.portgroup)
+
+            backing = nic[:backing]
+            break if backing.nil?
+            break if !network_card_backing_info_eq(backing,
+                                                   prepared_backing)
+
+            prepared_backing = nil
+
+            connectable = nic[:connectable]
+            break if !config.startConnected.nil? &&
+                config.startConnected != connectable[:startConnected]
+            break if !config.allowGuestControl.nil? &&
+                config.allowGuestControl != connectable[:allowGuestControl]
+
+            break if !config.mac_addressType.nil? &&
+              config.mac_addressType != nic[:addressType]
+            break if !config.mac.nil? &&
+              config.mac != nic[:macAddress]
+
+            # This nic does not require any changes
+            return nil
+          end while false
+
+          new_nic = nic.class.new(
+            key: nic[:key],
+          )
+
+          spec = VIM.VirtualDeviceConfigSpec(
+            operation: :edit,
+            device: new_nic
+          )
+
+          unless prepared_backing.nil?
+            new_nic[:backing] = prepared_backing
+          end
+
+          unless config.startConnected.nil? && config.allowGuestControl.nil?
+            new_nic[:connectable] = \
+              nic[:connectable].dup.tap do |connInfo|
+
+                connInfo[:allowGuestControl] = config.allowGuestControl \
+                  unless config.allowGuestControl.nil?
+
+                unless config.startConnected.nil?
+                  connInfo[:startConnected] = config.startConnected
+                  connInfo[:connected] = config.startConnected
+                end
+              end
+          end
+
+          unless config.mac_addressType.nil?
+            new_nic[:addressType] = config.mac_addressType
+          end
+          unless config.mac.nil?
+            new_nic[:macAddress] = config.mac
+          end
+
+          spec
+        end
+
+        def add_network_card(network_info, vsphere_env, config)
+          return nil if config.nil?
+
+          # Use unique device key when adding.
+          key = vsphere_env.next_device_key
+
+          spec = VIM.VirtualDeviceConfigSpec(
+            operation: :add,
+            device: VIM.VirtualVmxnet3(
+              key: key,
+              backing: \
+                prepare_network_card_backing_info(network_info,
+                                                  config.portgroup)
+            )
+          )
+
+          unless config.startConnected.nil? && config.allowGuestControl.nil?
+            spec[:device][:connectable] = \
+              VIM.VirtualDeviceConnectInfo.tap do |connectable|
+
+                unless config.startConnected.nil?
+                    connectable[:allowGuestControl] = config.allowGuestControl
+                end
+
+                unless config.startConnected.nil?
+                    connectable[:startConnected] = config.startConnected
+                end
+              end
+          end
+
+          unless config.mac_addressType.nil?
+            spec[:device][:addressType] = config.mac_addressType
+          end
+          unless config.mac.nil?
+            spec[:device][:macAddress] = config.mac
+          end
+
+          spec
+        end
+
+        def prepare_network_card_backing_info(network_info, portgroup_name)
+          portgroup = \
+            network_info[:portgroup].find do |pg|
+              if pg.is_a?(VIM::DistributedVirtualPortgroup)
+                pg.config.name == portgroup_name
+              else
+                pg.spec.name == portgroup_name
+              end
+          end
+
+          if portgroup.nil?
+            fail(Errors::VSphereError,
+                 _key: :'provision.vm.missing_network',
+                 name: portgroup_name)
+          end
+
+          if portgroup.is_a?(VIM::DistributedVirtualPortgroup)
+            VIM.VirtualEthernetCardDistributedVirtualPortBackingInfo(
+              port: VIM.DistributedVirtualSwitchPortConnection(
+                switchUuid: portgroup.config.distributedVirtualSwitch.uuid,
+                portgroupKey: portgroup.key
+              )
+            )
+          else
+            VIM.VirtualEthernetCardNetworkBackingInfo(
+              deviceName: portgroup.spec.name
+            )
+          end
+        end
+
+        def network_card_backing_info_eq(a, b)
+          return false if a.class != b.class
+
+          if a.is_a?(VIM::VirtualDeviceBackingInfo)
+            return false if a[:deviceName] != b[:deviceName]
+          elsif a.is_a?(VIM::VirtualEthernetCardDistributedVirtualPortBackingInfo)
+            aPort = a.port
+            bPort = b.port
+            return false if aPort[:switchUuid] != bPort[:switchUuid]
+            return false if aPort[:portgroupKey] != bPort[:portgroupKey]
+          end
+
+          return true
+        end
+
+        def prepare_customization_spec(config, provider_config)
+          return nil if provider_config.get_customization.nil?
+
+          networks = config.vm.networks
+
+          nicSettingMap = []
+
+          provider_config.nics.each_value do |nic|
+            portgroup = nic.portgroup
+            network = networks.find { |type, options|
+              type != :forwarded_port && options[:id] == portgroup }
+
+            options = network[1]
+
+            if (options[:auto_config].nil? || options[:auto_config]) \
+                && (options[:type].nil? || options[:type] != "dhcp")
+
+              address = NetAddr::CIDR.create(options[:ip])
+
+              nicSettingMap << VIM.CustomizationAdapterMapping(
+                adapter: {
+                  ip: VIM.CustomizationFixedIp(
+                    ipAddress: address.ip,
+                  ),
+                  subnetMask: address.wildcard_mask,
+                }
+              )
+            else
+              nicSettingMap << VIM.CustomizationAdapterMapping(
+                adapter: {
+                  ip: VIM.CustomizationDhcpIpGenerator
+                }
+              )
             end
           end
+
+          provider_config.get_customization.prepare_spec(nicSettingMap)
         end
 
-        def add_custom_memory(spec, memory_mb)
-          spec[:config][:memoryMB] = Integer(memory_mb)
-        end
-
-        def add_custom_cpu(spec, cpu_count)
-          spec[:config][:numCPUs] = Integer(cpu_count)
-        end
-
-        def add_custom_cpu_reservation(spec, cpu_reservation)
-          spec[:config][:cpuAllocation] = RbVmomi::VIM.ResourceAllocationInfo(reservation: cpu_reservation)
-        end
-
-        def add_custom_mem_reservation(spec, mem_reservation)
-          spec[:config][:memoryAllocation] = RbVmomi::VIM.ResourceAllocationInfo(reservation: mem_reservation)
-        end
       end
     end
   end

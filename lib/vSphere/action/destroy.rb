@@ -23,17 +23,11 @@ module VagrantPlugins
 
         def destroy_vm(env)
           return if env[:machine].state.id == :not_created
-          vm = get_vm_by_uuid env[:vSphere_connection], env[:machine]
+          vm = get_vm_by_uuid env[:vsphere].connection, env[:machine]
           return if vm.nil?
 
-          begin
-            env[:ui].info I18n.t('vsphere.destroy_vm')
-            vm.Destroy_Task.wait_for_completion
-          rescue Errors::VSphereError
-            raise
-          rescue StandardError => e
-            raise Errors::VSphereError.new, e.message
-          end
+          env[:ui].info I18n.t('vsphere.destroy_vm')
+          vm.Destroy_Task.wait_for_completion
         end
       end
     end

@@ -34,6 +34,7 @@ module VagrantPlugins
         id = @machine.id.nil? ? 'new' : @machine.id
         "vSphere (#{id})"
       end
+
     end
   end
 end

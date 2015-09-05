@@ -1,4 +1,3 @@
-require 'rbvmomi'
 require 'vSphere/util/vim_helpers'
 
 module VagrantPlugins
@@ -9,25 +8,46 @@ module VagrantPlugins
 
         def initialize(app, _env)
           @app = app
+          @logger = Plugin.logger_for(self.class)
         end
 
         def call(env)
-          env[:machine_ssh_info] = get_ssh_info(env[:vSphere_connection], env[:machine])
+          connection = env[:vsphere].connection
+
+          env[:machine_ssh_info] = \
+                  get_ssh_info(connection, env[:machine], env)
 
           @app.call env
         end
 
         private
 
-        def get_ssh_info(connection, machine)
-          return nil if machine.id.nil?
+        def get_ssh_info(connection, machine, env)
+          if machine.id.nil?
+            @logger.debug('Machine has no ID')
+            return nil 
+          end
 
           vm = get_vm_by_uuid connection, machine
 
-          return nil if vm.nil?
-          return nil if vm.guest.ipAddress.nil? || vm.guest.ipAddress.empty?
+          if vm.nil?
+            @logger.debug('Failed to find the VM by its id: ' + machine.id.to_s)
+            return nil 
+          end
+
+          if vm.guest.ipAddress.nil? || vm.guest.ipAddress.empty?
+            @logger.debug('VM has no IP address specified in the' +
+                          ' ipAddress field')
+            return nil
+          end
+
+          address = vm.guest.ipAddress
+
+          @logger.debug("Setting nfs_machine_ip to #{address}")
+          env[:nfs_machine_ip] = address
+
           {
-            host: vm.guest.ipAddress,
+            host: address,
             port: 22
           }
         end

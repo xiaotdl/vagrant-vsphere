@@ -14,7 +14,8 @@ module VagrantPlugins
         end
 
         def call(env)
-          env[:machine_state_id] = get_state(env[:vSphere_connection], env[:machine])
+          env[:machine_state_id] = \
+            get_state(env[:vsphere].connection, env[:machine])
 
           @app.call env
         end
@@ -31,7 +32,9 @@ module VagrantPlugins
           if powered_on?(vm)
             :running
           else
-            # If the VM is powered off or suspended, we consider it to be powered off. A power on command will either turn on or resume the VM
+            # If the VM is powered off or suspended, we consider it to be
+            # powered off. A power on command will either turn on or resume
+            # the VM
             :poweroff
           end
         end

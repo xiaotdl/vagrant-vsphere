@@ -1,68 +1,287 @@
 en:
   vsphere:
-    creating_cloned_vm: |-
-      Calling vSphere CloneVM with the following settings:
+    creating_cloned_vm:
+      from_template: |-
+        Creating a VM from a template:
+         -- Template: %{template}
+         -- New VM: %{folder}/%{name}
+      from_vm: |-
+        Creating a VM by cloning another VM:
+         -- Source VM: %{source}
+         -- New VM: %{folder}/%{name}
     creating_cloned_vm_sdrs: |-
-      Calling vSphere ApplyStorageDrsRecommendation with the following settings:
+      Creating vSphere ApplyStorageDrsRecommendation with the following
+      settings:
+       -- Storage DRS recommendation: %{target} %{reason}
     requesting_sdrs_recommendation: |-
-      Calling vSphere RecommendDatastores with StoragePlacementSpec of the following settings:
+      Requesting vSphere RecommendDatastores with StoragePlacementSpec for
+      the following settings:
+       -- Datastore Cluster: %{datastore}
+       -- Template VM: %{template}
+       -- Target VM: %{folder}/%{name}
     vm_clone_success: |-
-      New virtual machine successfully cloned and started
+      New virtual machine successfully cloned and started.
     destroy_vm: |-
-      Calling vSphere Destroy
+      Calling vSphere Destroy.
     power_off_vm: |-
-      Calling vSphere PowerOff
+      Calling vSphere PowerOff.
     power_on_vm: |-
-      Calling vSphere PowerOn
+      Calling vSphere PowerOn.
     vm_already_created: |-
-      The VM is already created
+      The VM is already created.
+    vm_already_running: |-
+      The VM is already running.
     vm_not_created: |-
-      The VM has not been created
+      The VM has not been created.
     vm_not_running: |-
-      The VM is not running
+      The VM is not running.
     waiting_for_ssh: |-
       Waiting for SSH to become available...
     waiting_for_winrm: |-
       Waiting for WinRM to become available...
 
-    errors:
-      missing_template: |-
-        Configured template/source VM could not be found
-      invalid_base_path: |-
-        Could not find base path for target VM, check 'vm_base_path' configuration value
-      missing_datacenter: |-
-        Configured data center not found
-      missing_compute_resource: |-
-        Configured compute resource not found
-      missing_resource_pool: |-
-        Configured resource pool not found
-      null_configuration_spec_manager: |-
-        Configuration spec manager not configured in the ServiceInstance
-      missing_configuration_spec: |-
-        Configured configuration spec not found
-      missing_datastore: |-
-        Configured data store not found
-      too_many_private_networks: |-
-        There a more private networks configured than can be assigned to the customization spec
-      missing_vlan: |-
-        Configured vlan not found
-      missing_network_card: |-
-        Cannot find network card to customize
-      invalid_configuration_linked_clone_with_sdrs: |-
-        Cannot use Linked Clone with Storage DRS
+    info:
 
-    config:
-      host: |-
-        Configuration must specify a vSphere host
-      user: |-
-        Configuration must specify a vSphere user
-      password: |-
-        Configuration must specify a vSphere password
-      name: |-
-        Configuration must specify a VM name
-      template: |-
-        Configuration must specify a template name
-      compute_resource: |-
-        Configuration must specify a compute resource name
-      resource_pool: |-
-        Configuration must specify a resource pool name
+      provision:
+
+        vswitch:
+          creating: |-
+            Creating new vSwitch: %{name}
+          deleting: |-
+            Removing vSwitch: %{name}
+
+        portgroup:
+          creating: |-
+            Creating new Port Group: %{name} on %{vswitch}
+          deleting: |-
+            Removing Port Group: %{name} on %{vswitch}
+
+        pool:
+          creating: |-
+            Creating new Pool: %{path}
+          deleting: |-
+            Removing Pool: %{path}
+
+        folder:
+          creating: |-
+            Creating new Folder: %{path}
+          deleting: |-
+            Removing Folder: %{path}
+
+
+    warn:
+      config:
+        vm_base_path: |-
+          'vm_base_path' is deprecated.  Use 'folder' instead.
+        vlan: >-
+          Global 'vlan' is deprecated.  Use 'portgroup' on an individual NIC
+          instead.
+        addressType: >-
+          Global 'addressType' is deprecated.  Use 'mac_addressType' on an
+          individual NIC instead.
+        mac: >-
+          Global 'mac' is deprecated.  Use 'mac' on an individual NIC
+          instead.
+
+    errors:
+
+      config:
+
+        host: |-
+          Configuration must specify a vSphere host.
+        user: |-
+          Configuration must specify a vSphere user.
+        password: |-
+          Configuration must specify a vSphere password.
+
+        resource_pool:
+          invalid_name_type: |-
+            resource_pool_name is not a string, or an Enumerable.
+            Got: %{type}
+          missing: |-
+            Can not find Resource Pool: %{path}.
+
+        requires_customization: |-
+          If any of the networks, declared for the VM assign IP addresses,
+          'customization' declaration is required.  This is the vSphere API
+          requirement.  IP address assignements:
+              %{nics_and_network_names}
+
+        customization:
+          requires_identity: |-
+            'identity' is required within a customization declaration.
+
+          name:
+            invalid_type: >-
+              The only supported '%{prop_name}' types are: :custom, :fixed,
+              :prefix, :unknown and :vm.  Got: :%{type}
+            type_unknown: >-
+              :unknown is not a supported '%{prop_name}' type as vShpere
+              does not have means to ask the user for the name to use.
+
+            fixed:
+              requires_name: |-
+                'name' argument is required when using :fixed name.
+
+            prefix:
+              requires_base: |-
+                'base' argument is required when using :prefix name.
+
+          identity:
+            invalid_type: >-
+              The only supported types for customization.identity are:
+              :linux, :sysprep and :sysprep_text.  Got: :%{type}.
+            merge_error: >-
+              Failed while merging customization.identity settings.  First
+              identity is '%{first_type}' while the second is '%{second_type}'.
+
+            linux:
+              requires_domain: |-
+                'domain' is requried within a :linux customization.identity
+                declaration.
+              requires_hostName: |-
+                'hostName' is requried within a :linux customization.identity
+                declaration.
+              hostName:
+                merge_error: >-
+                  Failed while merging customization.identity.hostName
+                  settings.  First hostName is '%{first_type}' while the
+                  second is '%{second_type}'.
+
+            sysprep:
+              not_supported: |-
+                :sysprep identity is not supported at the moment.
+
+            sysprep_text:
+              not_supported: |-
+                :sysprep identity is not supported at the moment.
+
+        vm:
+          name: |-
+            Configuration must specify a VM name.
+          template: |-
+            Configuration must specify a template name.
+          compute_resource: |-
+            Configuration must specify a compute resource name.
+          memory_mb: |-
+            'memory_mb' should be an integer.  Got: %{value}.
+          cpu_count: |-
+            'cpu_count' should be an integer.  Got: %{value}.
+          cpu_reservation: |-
+            'cpu_reservation' should be an integer.  Got: %{value}.
+          mem_reservation: |-
+            'mem_reservation' should be an integer.  Got: %{value}.
+
+        vswitch:
+          name_too_long: |-
+            vShpere requires vSwitch names to be less than 32 characters.
+            Got name: %{name}
+            Exceeding characters:                    %{exceeding}
+
+        portgroup:
+          requires_name: |-
+            Port Group requires a name.
+          name_too_long: |-
+            vShpere requires Port Group names to be less than 32 characters.
+            Got name: %{name}
+            Exceeding characters:                    %{exceeding}
+          requires_vswitch: |-
+            Port Group '%{name}': 'vswitch' is required.
+          requires_network: |-
+            Port Group '%{name}': Name should match a defined network name.
+
+        nic:
+          requires_index: |-
+            Internal error.  Nic does not have an index.
+          requires_portgroup: |-
+            Nic %{index}: 'portgroup' is required.
+          index_should_be_an_integer: >-
+            Nic index should be an integer.  Got: '%{value}', which is a
+            '%{type}'
+          indices_start_with_one: |-
+            Nic indices start with 1.  Got: %{index}.
+          requires_network: >-
+            Nic %{index}: 'portgroup' should refer to an existing network.  Got:
+            %{network_id}
+          global_vlan_clash: >-
+            Global 'vlan' ('%{vlan}') is used as the 'portgroup' applied to
+            the first NIC, but it already has a value - '%{nic_portgroup}'.
+          global_addressType_clash: >-
+            Global 'addressType' ('%{addressType}') is used as the
+            'mac_addressType' applied to the first NIC, but it already has a
+            value - '%{nic_mac_addressType}'.
+          global_mac_clash: >-
+            Global 'mac' ('%{mac}') is used as the 'mac' applied to the first
+            NIC, but it already has a value - '%{nic_mac}'.
+          invalid_mac_addressType: >-
+            Nic %{index}: Supported values for 'mac_addressType' are
+            'manual', 'generated' and 'assigned'.  Got: %{value}.
+
+        network:
+          forwarded_port: >-
+            Network :%{type} '%{id}': Port forwarding is not supported at the
+            moment.
+          duplicate_name: >-
+            Two different :public_network and :private_network networks may not
+            use the same id: %{id}.
+          unknown_type: |-
+            Network :%{type} '%{id}': Unsupported network type: %{type}.
+          unreferenced: >-
+            Network :%{type} '%{id}': Network is not referenced by any nic
+            defined for the VM.
+          missing_ip: |-
+            Network :%{type} '%{id}': IPv4 address is required unless
+            'auto_config' is 'false'.
+          not_ipv4: >-
+            Network :%{type} '%{id}': 'ip' address given does not look like
+            IPv4.  IPv4 is the only address format supported at the moment.
+            Got: %{address}
+
+      provision:
+
+        compute:
+          empty: |-
+            Compute resource has no hosts attached.
+          cluster: |-
+            Compute resource is a cluster.  Not supported at the moment.
+
+        portgroup:
+          invalid_vswitch: >-
+            Port Group '%{name}': Already exists but is connected to vswitch
+            '%{connected_vswitch}' instead of expected vswitch
+            '%{expected_vswitch}'.
+          invalid_vlanId: >-
+            Port Group '%{name}': Already exists but has vlanId
+            (%{existing_vlanId}) different from the expected
+            (%{expected_vlanId}).
+
+        vm:
+          missing_template: |-
+            Can not find template/source VM: %{name}.
+          invalid_base_path: >-
+            Could not find base path ('vm_base_path') for target VM: %{path}.
+          missing_network: |-
+            Can not find network by its name: %{name}.
+          linked_clone_with_sdrs: |-
+            Cannot use Linked Clone with Storage DRS.
+
+          customization_spec:
+            network_count: >-
+              Customization spec '%{name}' has less NICs configured
+              (%{spec_nic_count}) then there are :public_network and
+              :private_network networks defined (%{network_count}).
+
+      missing_datacenter: |-
+        Can not find Datacenter: %{name}.
+      missing_compute_resource: |-
+        Can not find Claster Compute or Compute resource: %{name}.
+      null_configuration_spec_manager: >-
+        Internal error: Failed to obtain Configuration spec manager via the
+        ServiceInstance.
+      missing_configuration_spec: |-
+        Can not find Configuration Spec: %{name}.
+      missing_datastore: |-
+        Can not find Datastore: %{name}.
+
+      missing_network_card: |-
+        Cannot find network card to customize.
