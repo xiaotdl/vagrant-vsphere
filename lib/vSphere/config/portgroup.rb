@@ -1,6 +1,9 @@
 require 'vagrant'
 
+require 'rbvmomi'
+
 require_relative '../config_base'
+require_relative 'host_network_policy'
 
 module VagrantPlugins
   module VSphere
@@ -8,8 +11,9 @@ module VagrantPlugins
       class Portgroup < ConfigBase
 
         config_field_simple :name
-        config_field_simple :vswitch
+        config_field_forward :policy, HostNetworkPolicy
         config_field_simple :vlan_id
+        config_field_simple :vswitch
 
         config_field_simple :auto_delete, default: true
 
@@ -40,6 +44,23 @@ module VagrantPlugins
           if @vswitch.nil?
             errors << I18n.t("#{ERR_PREFIX}.requires_vswitch",
                             name: @name)
+          end
+        end
+
+        # --- vSphere API mapping ---
+
+        VIM = RbVmomi::VIM
+
+        def prepare_spec
+          VIM.HostPortGroupSpec.tap do |spec|
+            spec[:name] = @name
+            spec[:policy] = if @policy.nil?
+                              VIM.HostNetworkPolicy()
+                            else
+                              @policy.prepare_spec
+                            end
+            spec[:vlanId] = @vlan_id
+            spec[:vswitchName] = @vswitch
           end
         end
 

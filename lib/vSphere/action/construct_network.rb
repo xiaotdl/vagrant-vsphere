@@ -43,9 +43,9 @@ module VagrantPlugins
             hostNetworkConfig = VIM.HostNetworkConfig()
 
             # We only update our state if we actually executed the
-            # configuration requrest.  Alternative would be to clone current
-            # network info, modify the env version directly, and restore the
-            # clone if something goes wrong.
+            # configuration request.  Alternative would be to clone current
+            # network info, modify the env version directly, and restore
+            # the clone if something goes wrong.
             added_vswitches = []
             added_portgroups = []
 
@@ -72,7 +72,6 @@ module VagrantPlugins
                                    network_info, provider_config)
           provider_config.vswitches.each_value do |vswitch|
             name = vswitch.name
-            numPorts = vswitch.num_ports
 
             existing = \
               network_info[:vswitch].detect { |s| s.name == name && s }
@@ -89,7 +88,7 @@ module VagrantPlugins
             hostNetworkConfig[:vswitch] << VIM.HostVirtualSwitchConfig(
               :changeOperation => :add,
               :name => name,
-              :spec => VIM.HostVirtualSwitchSpec(:numPorts => numPorts)
+              :spec => vswitch.prepare_spec
             )
 
             # We only store the properties we are going to use.
@@ -104,7 +103,6 @@ module VagrantPlugins
           provider_config.portgroups.each_value do |portgroup|
             name = portgroup.name
             vswitch = portgroup.vswitch
-            vlanId = portgroup.vlan_id
 
             existing = \
               network_info[:portgroup].detect { |pg|
@@ -123,23 +121,15 @@ module VagrantPlugins
 
             hostNetworkConfig[:portgroup] ||= []
 
+            spec = portgroup.prepare_spec
             hostNetworkConfig[:portgroup] << VIM.HostPortGroupConfig(
               :changeOperation => :add,
-              :spec => VIM.HostPortGroupSpec(
-                :name => name,
-                :policy => VIM.HostNetworkPolicy(),
-                :vlanId => vlanId,
-                :vswitchName => vswitch
-              )
+              :spec => spec
             )
 
             # We only store the properties we are going to use.
             added_portgroups << VIM.HostPortGroup(
-              spec: VIM.HostPortGroupSpec(
-                name: name,
-                vlanId: vlanId,
-                vswitchName: vswitch,
-              )
+              spec: spec
             )
           end
         end

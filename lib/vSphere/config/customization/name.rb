@@ -13,7 +13,7 @@ module VagrantPlugins
       class Customization < ConfigBase
         class Name
 
-          # This class is a factory for all the Identity::* classes.
+          # This class is a factory for all the Name::* classes.
 
           @@name_classes = {
             'custom' => Name::Custom,
