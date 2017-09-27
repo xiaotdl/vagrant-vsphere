@@ -4,8 +4,8 @@ require 'vSphere/version'
 Gem::Specification.new do |s|
   s.name = 'vagrant-vsphere'
   s.version = VagrantPlugins::VSphere::VERSION
-  s.authors = ['Andrew Grauch', 'Ilya Bobyr']
-  s.email = ['andrew.grauch@nsidc.org', 'ilya.bobyr@gmail.com']
+  s.authors = ['Andrew Grauch', 'Ilya Bobyr', 'Xiaotian Li']
+  s.email = ['andrew.grauch@nsidc.org', 'ilya.bobyr@gmail.com', 'xiaotdl@gmail.com']
   s.homepage = ''
   s.license = 'MIT'
   s.summary = 'VMWare vSphere provider'

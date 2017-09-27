@@ -17,7 +17,7 @@ module VagrantPlugins
         # in separate datastructures, and use "combined" view.
         #
         # Must be called under Sync.resourceLock.
-        def self.retreive_network_info(vsphere_env, connection, host)
+        def self.retreive_network_info(vsphere_env, connection, host, dc)
           unless Sync.resourceLock.owned?
             fail "Internal error: Sync.resourceLock is not owned by" \
               + " the current thread while calling retreive_network_info()"
@@ -30,10 +30,30 @@ module VagrantPlugins
 
           propertyCollector = connection.propertyCollector
 
-          # TODO Retreive distrubuted port groups, to allow distributed
-          # port group to be selected when cloning.  See
-          # Action::Clone.prepare_network_card_backing_info.
+          # network_info will store both objects we received from the
+          # vSphere and objects we create ourselves to record creation
+          # operations we initiated.
+          network_info[:vswitch] = []
+          network_info[:portgroup] = []
 
+          # Retreive distrubuted port groups
+          filterSpec = VIM.PropertyFilterSpec(
+            :objectSet => dc.network.map do |network|
+              {:obj => network}
+            end,
+            :propSet => [{
+              :type => "DistributedVirtualPortgroup",
+              :all => true
+            }]
+          )
+
+          result = propertyCollector.RetrieveProperties(:specSet => [filterSpec])
+
+          result.each do |objectContent|
+            network_info[:portgroup] << objectContent.obj
+          end
+
+          # Retreive standard switches and port groups
           filterSpec = VIM.PropertyFilterSpec(
             :objectSet => [{
               :obj => host,
@@ -56,12 +76,6 @@ module VagrantPlugins
             :specSet => [filterSpec],
             :options => { }
           )
-
-          # network_info will store both objects we received from the
-          # vSphere and objects we create ourselves to record creation
-          # operations we initiated.
-          network_info[:vswitch] = []
-          network_info[:portgroup] = []
 
           return network_info unless result
 

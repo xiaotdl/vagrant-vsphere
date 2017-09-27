@@ -26,14 +26,13 @@ module VagrantPlugins
 
           compute = get_compute_resource(dc, provider_config)
 
-          # Support only one host configuration at the moment.
           if (compute.host.length == 0)
             fail Errors::VSphereError, 'provision.compute.empty'
+          elsif (compute.host.length == 1)
+            host = compute.host[0]
           elsif (compute.host.length > 1)
-            fail Errors::VSphereError, 'provision.compute.cluster'
+            host = compute.host.select {|h| h.name.eql?(provider_config.cluster_host)}[0]
           end
-
-          host = compute.host[0]
 
           Sync.resourceLock.synchronize do
             # I was not able to easily map port groups to VMs, in order to
@@ -79,7 +78,11 @@ module VagrantPlugins
           )
 
           portgroups.each do |portgroup|
-            name = portgroup.spec.name
+            if portgroup.is_a?(VIM::DistributedVirtualPortgroup)
+              name = portgroup.name
+            else
+              name = portgroup.spec.name
+            end
 
             next unless toDelete.key?(name)
 

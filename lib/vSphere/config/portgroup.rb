@@ -29,10 +29,10 @@ module VagrantPlugins
             return
           end
 
-          if @name.length >= 32
+          if @name.length >= 64
             errors << I18n.t("#{ERR_PREFIX}.name_too_long",
                              name: @name,
-                             exceeding: '^' * (@name.length - 31)
+                             exceeding: '^' * (@name.length - 63)
                             )
           end
 
@@ -41,10 +41,10 @@ module VagrantPlugins
                              name: @name)
           end
 
-          if @vswitch.nil?
-            errors << I18n.t("#{ERR_PREFIX}.requires_vswitch",
-                            name: @name)
-          end
+          #if @vswitch.nil?
+          #  errors << I18n.t("#{ERR_PREFIX}.requires_vswitch",
+          #                  name: @name)
+          #end
         end
 
         # --- vSphere API mapping ---

@@ -185,8 +185,6 @@ en:
             vShpere requires Port Group names to be less than 32 characters.
             Got name: %{name}
             Exceeding characters:                    %{exceeding}
-          requires_vswitch: |-
-            Port Group '%{name}': 'vswitch' is required.
           requires_network: |-
             Port Group '%{name}': Name should match a defined network name.
 

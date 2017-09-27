@@ -1,3 +1,8 @@
+## [1.6.5 (2017-09-14)]()
+
+  - Add cluster/dvSW support - [reviewboard](https://reviewboard.olympus.f5net.com/r/237851)
+  - Fix prepare_nfs_valid_ids.rb to get all the valid NFS IDs - [reviewboard](https://reviewboard.olympus.f5net.com/r/239125/)
+
 ## [1.4.1 (2015-09-01)](https://github.com/nsidc/vagrant-vsphere/releases/tag/v1.4.1)
 
   - Update dependency on [rbvmomi](https://github.com/vmware/rbvmomi) to 1.8.2

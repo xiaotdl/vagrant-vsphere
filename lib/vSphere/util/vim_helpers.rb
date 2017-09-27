@@ -20,6 +20,20 @@ module VagrantPlugins
           get_datacenter(connection, machine).vmFolder.findByUuid(machine.id)
         end
 
+        def get_host(datacenter, provider_config)
+          compute = get_compute_resource(datacenter, provider_config)
+
+          if (compute.host.length == 0)
+            fail Errors::VSphereError, 'provision.compute.empty'
+          elsif (compute.host.length == 1)
+            host = compute.host[0]
+          elsif (compute.host.length > 1)
+            host = compute.host.select {|h| h.name.eql?(provider_config.cluster_host)}[0]
+          end
+
+          host
+        end
+
         def get_resource_pool(datacenter, provider_config)
           compute_resource = get_compute_resource(datacenter, provider_config)
 

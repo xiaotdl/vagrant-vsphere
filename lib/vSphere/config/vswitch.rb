@@ -22,10 +22,10 @@ module VagrantPlugins
         def validate_fields(errors, machine)
           super(errors, machine)
 
-          if !@name.nil? && @name.length >= 32
+          if !@name.nil? && @name.length >= 64
             errors << I18n.t("#{ERR_PREFIX}.name_too_long",
                              name: @name,
-                             exceeding: '^' * (@name.length - 31)
+                             exceeding: '^' * (@name.length - 63)
                             )
           end
         end

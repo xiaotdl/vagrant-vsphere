@@ -73,15 +73,23 @@ module VagrantPlugins
           return [] unless result
 
           ids = []
-          result.objects.map do |objectContent|
-            objectContent.propSet.each do |p|
-              case p.name
-              when 'config.uuid'
-                ids << p.val
-              else
-                fail "Internal error: Unexpected property returned: #{p.name}"
+          while true
+            result.objects.map do |objectContent|
+              objectContent.propSet.each do |p|
+                case p.name
+                when 'config.uuid'
+                  ids << p.val
+                else
+                  fail "Internal error: Unexpected property returned: #{p.name}"
+                end
               end
             end
+
+            break if result.token.nil?
+
+            result = propertyCollector.ContinueRetrievePropertiesEx(
+              :token => result.token
+            )
           end
 
           ids

@@ -20,6 +20,7 @@ module VagrantPlugins
       config_field_simple :data_center_name
 
       config_field_simple :compute_resource_name
+      config_field_simple :cluster_host
 
       config_field_simple :clone_from_vm
       config_field_simple :template_name

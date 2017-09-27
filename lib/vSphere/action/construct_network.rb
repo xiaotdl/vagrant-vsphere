@@ -26,17 +26,16 @@ module VagrantPlugins
 
           compute = get_compute_resource(dc, provider_config)
 
-          # Support only one host configuration at the moment.
           if (compute.host.length == 0)
             fail Errors::VSphereError, 'provision.compute.empty'
+          elsif (compute.host.length == 1)
+            host = compute.host[0]
           elsif (compute.host.length > 1)
-            fail Errors::VSphereError, 'provision.compute.cluster'
+            host = compute.host.select {|h| h.name.eql?(provider_config.cluster_host)}[0]
           end
 
-          host = compute.host[0]
-
           Sync.resourceLock.synchronize do
-            network_info = vsphere_env.network_info(host, false)
+            network_info = vsphere_env.network_info(host, dc, false)
 
             # Prepare all the host network modifications and execute then in one
             # operation.
@@ -106,9 +105,20 @@ module VagrantPlugins
 
             existing = \
               network_info[:portgroup].detect { |pg|
-                pg.spec.name == name && pg }
+                if pg.is_a?(VIM::DistributedVirtualPortgroup)
+                  pg.name == name && pg
+                else
+                  pg.spec.name == name && pg
+                end
+              }
 
             if existing
+              # DistributedVirtualPortgroup is only used for MGMT IP
+              # and needs to be manually created now
+              if existing.is_a?(VIM::DistributedVirtualPortgroup)
+                  next
+              end
+
               check_existing_portgroup(portgroup, existing)
               next
             end
@@ -136,7 +146,7 @@ module VagrantPlugins
 
         def check_existing_portgroup(portgroup, existing)
           vswitch = portgroup.vswitch
-          if existing.spec.vswitchName != vswitch
+          if !vswitch.nil? && !vswitch.to_s.empty? && existing.spec.vswitchName != vswitch
             fail Errors::VSphereError,
               _key: :'provision.portgroup.invalid_vswitch',
               name: portgroup.name,
@@ -145,7 +155,7 @@ module VagrantPlugins
           end
 
           vlanId = portgroup.vlan_id
-          if !vlanId.nil? && existing.spec.vlanId != vlanId
+          if !vlanId.nil? && !vlanId.to_s.empty? && existing.spec.vlanId != vlanId
             fail Errors::VSphereError,
               _key: :'provision.portgroup.invalid_vlanId',
               name: portgroup.name,

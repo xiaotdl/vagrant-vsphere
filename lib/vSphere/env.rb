@@ -41,17 +41,17 @@ module VagrantPlugins
       #
       # When lock is false, will only check that Sync.resourceLock is
       # locked.
-      def network_info(host, lock=true)
+      def network_info(host, dc, lock=true)
         if lock
           Sync.resourceLock.synchronize do
-            Util::Network.retreive_network_info(self, @connection, host)
+            Util::Network.retreive_network_info(self, @connection, host, dc)
           end
         else
           unless Sync.resourceLock.owned?
             fail "Internal error: Expected Sync.resourceLock"
           end
 
-          Util::Network.retreive_network_info(self, @connection, host)
+          Util::Network.retreive_network_info(self, @connection, host, dc)
         end
       end
 

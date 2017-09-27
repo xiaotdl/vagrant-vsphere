@@ -132,6 +132,21 @@ module VagrantPlugins
 
           env[:ui].info I18n.t('vsphere.vm_clone_success')
 
+          # disable VM DRS in Cluster
+          if new_vm.runtime.host.parent.instance_of?(RbVmomi::VIM::ClusterComputeResource)
+            cluster = new_vm.runtime.host.parent
+            config = cluster.configurationEx.drsVmConfig.select {|c| c.key.name == new_vm.name }.first
+            vm_spec = VIM.ClusterDrsVmConfigSpec(
+              :operation => VIM.ArrayUpdateOperation(config ? "edit" : "add"),
+              :info => VIM.ClusterDrsVmConfigInfo(
+                :key => new_vm,
+                :behavior => VIM.DrsBehavior("manual")
+              )
+            )
+            spec = VIM.ClusterConfigSpecEx(:drsVmConfigSpec => [vm_spec])
+            cluster.ReconfigureComputeResource_Task(:spec => spec, :modify => true).wait_for_completion
+          end
+
           @app.call env
         end
 
@@ -184,6 +199,10 @@ module VagrantPlugins
 
           unless provider_config.clone_from_vm
             spec[:pool] = get_resource_pool(dc, provider_config)
+          end
+
+          if provider_config.cluster_host
+            spec[:host] = get_host(dc, provider_config)
           end
 
           spec
@@ -269,16 +288,15 @@ module VagrantPlugins
         def get_network_info(vsphere_env, provider_config, dc)
           compute = get_compute_resource(dc, provider_config)
 
-          # We support only one host configuration at the moment.
           if (compute.host.length == 0)
             fail Errors::VSphereError, 'provision.compute.empty'
+          elsif (compute.host.length == 1)
+            host = compute.host[0]
           elsif (compute.host.length > 1)
-            fail Errors::VSphereError, 'provision.compute.cluster'
+            host = compute.host.select {|h| h.name.eql?(provider_config.cluster_host)}[0]
           end
 
-          host = compute.host[0]
-
-          vsphere_env.network_info(host)
+          vsphere_env.network_info(host, dc)
         end
 
         def find_customization_spec(connection, name)
@@ -470,7 +488,7 @@ module VagrantPlugins
           portgroup = \
             network_info[:portgroup].find do |pg|
               if pg.is_a?(VIM::DistributedVirtualPortgroup)
-                pg.config.name == portgroup_name
+                pg.name == portgroup_name
               else
                 pg.spec.name == portgroup_name
               end
@@ -499,9 +517,9 @@ module VagrantPlugins
         def network_card_backing_info_eq(a, b)
           return false if a.class != b.class
 
-          if a.is_a?(VIM::VirtualDeviceBackingInfo)
+          if a.instance_of?(VIM::VirtualEthernetCardNetworkBackingInfo)
             return false if a[:deviceName] != b[:deviceName]
-          elsif a.is_a?(VIM::VirtualEthernetCardDistributedVirtualPortBackingInfo)
+          elsif a.instance_of?(VIM::VirtualEthernetCardDistributedVirtualPortBackingInfo)
             aPort = a.port
             bPort = b.port
             return false if aPort[:switchUuid] != bPort[:switchUuid]
